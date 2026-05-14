@@ -7,6 +7,7 @@ Handles all teacher-side intelligence:
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -21,24 +22,28 @@ logger = logging.getLogger(__name__)
 
 PARSE_ASSIGNMENT_SYSTEM = """
 You are a teacher assistant bot. A teacher just sent an instruction to assign work to a student.
-Extract the assignment details and return ONLY a JSON object (no markdown, no backticks):
+Extract the assignment details and return ONLY a JSON object (no markdown, no backticks, no notes, no explanation):
 
 {
   "title": "<short title, max 10 words>",
   "description": "<full clear assignment description for the student>",
   "student_name": "<student name or handle mentioned, or null>",
-  "due_in_days": <integer number of days until due, or null if not mentioned>,
-  "due_date_str": "<ISO 8601 datetime string if you can infer it, else null>"
+  "due_in_hours": <integer number of hours until due, or null if not in hours>,
+  "due_in_days": <integer number of days until due, or null if not in days>
 }
 
-If a due date/time is not mentioned, set due_in_days to 3 (default).
-Be friendly and encouraging in the description — students will read it directly.
+Rules:
+- If due time is in hours (e.g. "due in 1 hour", "due in 2 hours"), set due_in_hours to that number
+- If due time is in days (e.g. "due in 3 days"), set due_in_days to that number
+- If no due time mentioned, set due_in_days to 3
+- Return ONLY the JSON object, absolutely nothing else after the closing brace
+- Be friendly and encouraging in the description — students will read it directly
 """
 
 FORMAT_FEEDBACK_SYSTEM = """
 You are a helpful teacher assistant. A teacher just wrote feedback on a student's submission.
 Rewrite this feedback in a warm, encouraging, constructive tone suitable for a student
-receiving it via Telegram. Keep it concise (2-4 sentences max). 
+receiving it via Telegram. Keep it concise (2-4 sentences max).
 Return ONLY the formatted feedback text, nothing else.
 """
 
@@ -58,10 +63,9 @@ class TeacherAgent(BaseAgent):
     name = "teacher_agent"
 
     def run(self, action: str, **kwargs):
-        """Dispatch to the right sub-method based on action."""
         dispatch = {
-            "parse_assignment":        self.parse_assignment,
-            "format_feedback":         self.format_feedback,
+            "parse_assignment":         self.parse_assignment,
+            "format_feedback":          self.format_feedback,
             "build_assignment_message": self.build_assignment_message,
         }
         handler = dispatch.get(action)
@@ -69,40 +73,29 @@ class TeacherAgent(BaseAgent):
             raise ValueError(f"TeacherAgent: unknown action '{action}'")
         return handler(**kwargs)
 
-    # ------------------------------------------------------------------
-    # Parse a natural language assignment instruction
-    # ------------------------------------------------------------------
-
     def parse_assignment(
         self,
         raw_instruction: str,
         user_id: Optional[int] = None,
     ) -> dict:
-        """
-        Parse teacher's natural language instruction into structured data.
-
-        Returns:
-            {
-                "title": str,
-                "description": str,
-                "student_name": str | None,
-                "due_date": datetime,
-            }
-        """
         try:
             raw = self.llm(
                 system=PARSE_ASSIGNMENT_SYSTEM,
                 user=raw_instruction,
                 max_tokens=512,
             )
-            clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            clean = raw.strip()
+            clean = clean.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            match = re.search(r'\{.*?\}', clean, re.DOTALL)
+            if match:
+                clean = match.group(0)
             data = json.loads(clean)
             self.log(input_text=raw_instruction, output_text=raw, user_id=user_id)
 
-            # Resolve due_date
             due_date = self._resolve_due_date(
+                due_in_hours=data.get("due_in_hours"),
                 due_in_days=data.get("due_in_days"),
-                due_date_str=data.get("due_date_str"),
+                raw_instruction=raw_instruction,
             )
 
             return {
@@ -114,17 +107,13 @@ class TeacherAgent(BaseAgent):
 
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"TeacherAgent.parse_assignment fallback: {e}")
-            # Graceful fallback — store the raw instruction as-is
+            due_date = self._parse_due_from_text(raw_instruction)
             return {
                 "title":        "Assignment",
                 "description":  raw_instruction,
                 "student_name": None,
-                "due_date":     datetime.utcnow() + timedelta(days=3),
+                "due_date":     due_date,
             }
-
-    # ------------------------------------------------------------------
-    # Format teacher's raw feedback into a student-friendly message
-    # ------------------------------------------------------------------
 
     def format_feedback(
         self,
@@ -132,7 +121,6 @@ class TeacherAgent(BaseAgent):
         user_id: Optional[int] = None,
         assignment_id: Optional[int] = None,
     ) -> str:
-        """Polish teacher's raw feedback into a warm student-facing message."""
         try:
             formatted = self.llm(
                 system=FORMAT_FEEDBACK_SYSTEM,
@@ -148,11 +136,7 @@ class TeacherAgent(BaseAgent):
             return formatted
         except Exception as e:
             logger.error(f"TeacherAgent.format_feedback error: {e}")
-            return raw_feedback  # fallback: send as-is
-
-    # ------------------------------------------------------------------
-    # Build the Telegram message sent to the student when assigned
-    # ------------------------------------------------------------------
+            return raw_feedback
 
     def build_assignment_message(
         self,
@@ -161,7 +145,6 @@ class TeacherAgent(BaseAgent):
         student_name: Optional[str] = None,
         assignment_id: Optional[int] = None,
     ) -> str:
-        """Generate the Telegram message a student receives for a new assignment."""
         due_str = due_date.strftime("%A, %d %B %Y at %H:%M UTC")
         context = f"Assignment: {description}\nDeadline: {due_str}"
         if student_name:
@@ -181,24 +164,40 @@ class TeacherAgent(BaseAgent):
             return msg
         except Exception as e:
             logger.error(f"TeacherAgent.build_assignment_message error: {e}")
-            return f"📚 New assignment!\n\n{description}\n\n⏰ Due: {due_str}"
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+            return f"New assignment!\n\n{description}\n\nDue: {due_str}"
 
     @staticmethod
     def _resolve_due_date(
-        due_in_days: Optional[int],
-        due_date_str: Optional[str],
+        due_in_hours: Optional[int] = None,
+        due_in_days: Optional[int] = None,
+        raw_instruction: str = "",
     ) -> datetime:
-        if due_date_str:
-            try:
-                return datetime.fromisoformat(due_date_str)
-            except ValueError:
-                pass
-        days = due_in_days if isinstance(due_in_days, int) and due_in_days > 0 else 3
-        return datetime.utcnow() + timedelta(days=days)
+        if isinstance(due_in_hours, int) and due_in_hours > 0:
+            return datetime.utcnow() + timedelta(hours=due_in_hours)
+        if isinstance(due_in_days, int) and due_in_days > 0:
+            return datetime.utcnow() + timedelta(days=due_in_days)
+        return TeacherAgent._parse_due_from_text(raw_instruction)
+
+    @staticmethod
+    def _parse_due_from_text(text: str) -> datetime:
+        text_lower = text.lower()
+
+        match = re.search(r'due in (\d+)\s*hour', text_lower)
+        if match:
+            return datetime.utcnow() + timedelta(hours=int(match.group(1)))
+
+        match = re.search(r'due in (\d+)\s*min', text_lower)
+        if match:
+            return datetime.utcnow() + timedelta(minutes=int(match.group(1)))
+
+        match = re.search(r'due in (\d+)\s*day', text_lower)
+        if match:
+            return datetime.utcnow() + timedelta(days=int(match.group(1)))
+
+        if 'tomorrow' in text_lower:
+            return datetime.utcnow() + timedelta(days=1)
+
+        return datetime.utcnow() + timedelta(days=3)
 
 
 # Singleton
