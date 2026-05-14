@@ -35,7 +35,10 @@ class LLMClient:
             self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
             self._model = settings.LLM_MODEL_ANTHROPIC
         elif self.provider == "openai":
-            self._client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+            self._client = openai.OpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+)
             self._model = settings.LLM_MODEL_OPENAI
         else:
             raise ValueError(f"Unknown LLM_PROVIDER: {self.provider}. Use 'anthropic' or 'openai'.")

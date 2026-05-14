@@ -14,26 +14,20 @@ logger = logging.getLogger(__name__)
 
 
 async def resolve_user_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | None:
-    """
-    Returns the role ('teacher' | 'student') of the sender,
-    or None if the user is not registered.
-    """
     if not update.effective_user:
         return None
     with db_session() as db:
         user = get_user_by_telegram_id(db, update.effective_user.id)
-        return user.role if user else None
+        role = user.role if user else None
+    return role
 
 
 async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Central dispatcher for all free-text messages.
-    Checks the sender's role and calls the appropriate handler.
-    """
     from bot.handlers.teacher import handle_teacher_message
     from bot.handlers.student import handle_student_message
 
     role = await resolve_user_role(update, context)
+    logger.info(f"route_message: user={update.effective_user.id} role={role}")
 
     if role == "teacher":
         await handle_teacher_message(update, context)

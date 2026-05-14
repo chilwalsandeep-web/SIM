@@ -60,20 +60,17 @@ async def send_message(telegram_id: int, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context) -> None:
-    """
-    Universal /start — checks if user is registered and routes accordingly.
-    New users see the welcome / onboarding message.
-    """
     from db.session import db_session
     from services.assignment_service import get_user_by_telegram_id
 
     user = update.effective_user
     with db_session() as db:
         db_user = get_user_by_telegram_id(db, user.id)
+        role = db_user.role if db_user else None
 
-    if db_user and db_user.is_teacher:
+    if role == "teacher":
         await cmd_start_teacher(update, context)
-    elif db_user and db_user.is_student:
+    elif role == "student":
         await cmd_start_student(update, context)
     else:
         await update.message.reply_text(

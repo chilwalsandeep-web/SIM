@@ -92,7 +92,8 @@ class StudentAgent(BaseAgent):
                 user=raw_message,
                 max_tokens=256,
             )
-            data = json.loads(raw)
+            clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(clean)
             self.log(
                 input_text=raw_message,
                 output_text=raw,

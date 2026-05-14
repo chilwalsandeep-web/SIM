@@ -148,22 +148,24 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Please /join a class first.")
             return
 
-        # Get the most recent active assignment
         assignments = get_active_assignments_for_student(db, student.id)
         if not assignments:
-            await update.message.reply_text(
-                "You have no active assignments right now. 🎉"
-            )
+            await update.message.reply_text("You have no active assignments right now. 🎉")
             return
+
         assignment = assignments[0]
         assignment_id = assignment.id
         teacher_telegram_id = assignment.teacher.telegram_id
+        teacher_id = assignment.teacher_id
+        student_id = student.id
+        student_name = student.full_name or student.telegram_handle or "A student"
+        assignment_title = assignment.title or "Assignment"
 
     # Interpret progress
     result = student_agent.run(
         action="interpret_progress",
         raw_message=text,
-        user_id=student.id,
+        user_id=student_id,
         assignment_id=assignment_id,
     )
 
@@ -172,7 +174,7 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
         record_progress_update(
             db=db,
             assignment_id=assignment_id,
-            student_id=student.id,
+            student_id=student_id,
             raw_message=text,
             interpreted_status=result["interpreted_status"],
             notes=result["notes"],
@@ -180,13 +182,15 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
         if result["interpreted_status"] == "in_progress":
             update_assignment_status(db, assignment_id, "in_progress")
 
-    # If it's a submission, handle accordingly
+    # If submission
     if result["is_submission"]:
         await _finalize_text_submission(
             update=update,
             context=context,
-            student=student,
+            student_id=student_id,
+            student_name=student_name,
             assignment_id=assignment_id,
+            assignment_title=assignment_title,
             text=text,
             teacher_telegram_id=teacher_telegram_id,
         )
@@ -198,24 +202,21 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
         raw_message=text,
         interpreted_status=result["interpreted_status"],
         is_submission=False,
-        user_id=student.id,
+        user_id=student_id,
         assignment_id=assignment_id,
     )
     await update.message.reply_text(ack)
 
-    # Notify teacher of status update
-    student_name = student.full_name or student.telegram_handle or "Your student"
+    # Notify teacher
     await context.bot.send_message(
         chat_id=teacher_telegram_id,
         text=(
-            f"📢 *Update from {student_name}:*\n"
-            f"_{text}_\n\n"
-            f"Status: *{result['interpreted_status']}*\n"
+            f"📢 Update from {student_name}:\n"
+            f"{text}\n\n"
+            f"Status: {result['interpreted_status']}\n"
             f"Summary: {result['notes']}"
         ),
-        parse_mode="Markdown",
     )
-
 
 # ---------------------------------------------------------------------------
 # Handle file / photo submissions
@@ -350,37 +351,34 @@ async def handle_student_voice(update: Update, context: ContextTypes.DEFAULT_TYP
 # ---------------------------------------------------------------------------
 
 async def _finalize_text_submission(
-    update, context, student, assignment_id, text, teacher_telegram_id
+    update, context, student_id, student_name,
+    assignment_id, assignment_title, text, teacher_telegram_id
 ) -> None:
     with db_session() as db:
         create_submission(
             db=db,
             assignment_id=assignment_id,
-            student_id=student.id,
+            student_id=student_id,
             submission_type="text",
             text_content=text,
         )
-        assignment = db.get(Assignment, assignment_id)
-        assignment_title = assignment.title if assignment else "Assignment"
 
     ack = student_agent.run(
         action="acknowledge_progress",
         raw_message=text,
         interpreted_status="completed",
         is_submission=True,
-        user_id=student.id,
+        user_id=student_id,
         assignment_id=assignment_id,
     )
     await update.message.reply_text(ack)
 
-    student_name = student.full_name or student.telegram_handle or "A student"
     await context.bot.send_message(
         chat_id=teacher_telegram_id,
         text=(
-            f"📬 *Submission from {student_name}*\n"
-            f"Assignment: *{assignment_title}*\n\n"
-            f"_{text}_\n\n"
-            "Please review and send your feedback by replying naturally!"
+            f"📬 Submission from {student_name}\n"
+            f"Assignment: {assignment_title}\n\n"
+            f"{text}\n\n"
+            "Please review and send your feedback!"
         ),
-        parse_mode="Markdown",
     )

@@ -95,7 +95,8 @@ class TeacherAgent(BaseAgent):
                 user=raw_instruction,
                 max_tokens=512,
             )
-            data = json.loads(raw)
+            clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(clean)
             self.log(input_text=raw_instruction, output_text=raw, user_id=user_id)
 
             # Resolve due_date

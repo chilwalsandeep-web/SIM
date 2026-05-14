@@ -50,7 +50,8 @@ class IntentRouter(BaseAgent):
         """
         try:
             raw = self.llm(system=SYSTEM_PROMPT, user=message, max_tokens=64)
-            data = json.loads(raw)
+            clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(clean)
             intent_str = data.get("intent", "unknown")
             intent = Intent(intent_str)
             logger.info(f"IntentRouter → {intent} (confidence={data.get('confidence')})")

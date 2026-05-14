@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "anthropic"          # 'anthropic' | 'openai'
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
-    LLM_MODEL_ANTHROPIC: str = "claude-sonnet-4-20250514"
+    LLM_MODEL_ANTHROPIC: str = "claude-sonnet-4-5"
     LLM_MODEL_OPENAI: str = "gpt-4o"
 
     # App

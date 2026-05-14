@@ -125,10 +125,12 @@ async def cmd_students(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines = ["👥 *Your Students:*\n"]
         for i, s in enumerate(students, 1):
             handle = f"@{s.telegram_handle}" if s.telegram_handle else "no handle"
-            lines.append(f"{i}. {s.full_name or 'Unknown'} ({handle})")
+            name = s.full_name or "Unknown"
+            lines.append(f"{i}. {name} ({handle})")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        message = "\n".join(lines)
 
+    await update.message.reply_text(message)
 
 # ---------------------------------------------------------------------------
 # /assignments  — list all assignments
@@ -168,10 +170,6 @@ async def cmd_assignments(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 async def handle_teacher_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Routes free-text teacher messages through the Intent Router.
-    Handles: assign_work, give_feedback, request_summary.
-    """
     user = update.effective_user
     text = update.message.text or ""
 
@@ -180,17 +178,18 @@ async def handle_teacher_message(update: Update, context: ContextTypes.DEFAULT_T
         if not teacher:
             await update.message.reply_text("Please /register first.")
             return
+        teacher_id = teacher.id
 
-    intent = intent_router.run(message=text, user_id=teacher.id)
+    intent = intent_router.run(message=text, user_id=teacher_id)
 
     if intent == Intent.ASSIGN_WORK:
-        await _handle_assign_work(update, context, teacher_id=teacher.id, text=text)
+        await _handle_assign_work(update, context, teacher_id=teacher_id, text=text)
 
     elif intent == Intent.GIVE_FEEDBACK:
-        await _handle_give_feedback(update, context, teacher_id=teacher.id, text=text)
+        await _handle_give_feedback(update, context, teacher_id=teacher_id, text=text)
 
     elif intent == Intent.REQUEST_SUMMARY:
-        await _handle_request_summary(update, context, teacher_id=teacher.id, text=text)
+        await _handle_request_summary(update, context, teacher_id=teacher_id, text=text)
 
     elif intent == Intent.GREETING:
         await update.message.reply_text(
@@ -199,8 +198,7 @@ async def handle_teacher_message(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await update.message.reply_text(
             "I'm not sure what you mean. Try something like:\n"
-            "_\"Assign Riya a 500-word essay on photosynthesis, due in 3 days\"_",
-            parse_mode="Markdown",
+            "Assign Riya a 500-word essay on photosynthesis, due in 3 days"
         )
 
 
