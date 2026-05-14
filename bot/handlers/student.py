@@ -44,17 +44,15 @@ async def cmd_start_student(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
     elif already_registered and role == "teacher":
         await update.message.reply_text(
-            "You're registered as a *Teacher*. Use /invite or type naturally to assign work.",
-            parse_mode="Markdown",
+            "You're registered as a Teacher. Use /invite or type naturally to assign work.",
         )
     else:
         await update.message.reply_text(
             f"👋 Hi {user.first_name}! Welcome to Classroom Companion.\n\n"
-            "Are you a *student* joining a class? Use:\n"
+            "Are you a student joining a class? Use:\n"
             "  /join <invite_code>\n\n"
-            "Are you a *teacher*? Use:\n"
+            "Are you a teacher? Use:\n"
             "  /register",
-            parse_mode="Markdown",
         )
 
 
@@ -68,8 +66,7 @@ async def cmd_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not args:
         await update.message.reply_text(
-            "Please provide your invite code:\n`/join ABC12345`",
-            parse_mode="Markdown",
+            "Please provide your invite code: /join ABC12345"
         )
         return
 
@@ -90,16 +87,14 @@ async def cmd_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-        teacher = link.teacher
-        teacher_name = teacher.full_name or teacher.telegram_handle or "your teacher"
+        teacher_name = link.teacher.full_name or link.teacher.telegram_handle or "your teacher"
 
     await update.message.reply_text(
-        f"✅ You've joined *{teacher_name}*'s class!\n\n"
+        f"✅ You've joined {teacher_name}'s class!\n\n"
         "You'll receive assignments here. You can:\n"
         "• Reply naturally to update your progress\n"
         "• Send text, files, photos, or voice notes to submit work\n"
         "• Use /assignments to see your current tasks",
-        parse_mode="Markdown",
     )
 
 
@@ -117,21 +112,23 @@ async def cmd_assignments_student(update: Update, context: ContextTypes.DEFAULT_
 
         assignments = get_active_assignments_for_student(db, student.id)
         if not assignments:
-            await update.message.reply_text("🎉 No active assignments right now. Enjoy the break!")
+            await update.message.reply_text("No active assignments right now. Enjoy the break!")
             return
 
-        lines = ["📋 *Your Assignments:*\n"]
+        lines = ["Your Assignments:\n"]
         for a in assignments:
             due = a.due_date.strftime("%d %b, %H:%M")
-            overdue = " ⚠️ OVERDUE" if a.is_overdue else ""
+            overdue = " OVERDUE" if a.is_overdue else ""
             status_emoji = {"pending": "⏳", "in_progress": "✏️", "submitted": "📬"}.get(a.status, "❓")
             lines.append(
-                f"{status_emoji} *{a.title}*{overdue}\n"
+                f"{status_emoji} {a.title}{overdue}\n"
                 f"   Due: {due} | Status: {a.status}\n"
-                f"   _{a.description[:80]}{'...' if len(a.description) > 80 else ''}_\n"
+                f"   {a.description[:80]}{'...' if len(a.description) > 80 else ''}\n"
             )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        message = "\n".join(lines)
+
+    await update.message.reply_text(message)
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +147,12 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
 
         assignments = get_active_assignments_for_student(db, student.id)
         if not assignments:
-            await update.message.reply_text("You have no active assignments right now. 🎉")
+            await update.message.reply_text("You have no active assignments right now.")
             return
 
         assignment = assignments[0]
         assignment_id = assignment.id
         teacher_telegram_id = assignment.teacher.telegram_id
-        teacher_id = assignment.teacher_id
         student_id = student.id
         student_name = student.full_name or student.telegram_handle or "A student"
         assignment_title = assignment.title or "Assignment"
@@ -218,8 +214,9 @@ async def handle_student_message(update: Update, context: ContextTypes.DEFAULT_T
         ),
     )
 
+
 # ---------------------------------------------------------------------------
-# Handle file / photo submissions
+# Handle file / photo / voice submissions
 # ---------------------------------------------------------------------------
 
 async def handle_student_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -236,32 +233,39 @@ async def handle_student_document(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("No active assignment to submit for.")
             return
         assignment = assignments[0]
+        teacher_telegram_id = assignment.teacher.telegram_id
+        student_name = student.full_name or student.telegram_handle or "Student"
+        assignment_title = assignment.title or "Assignment"
+        assignment_id = assignment.id
+        student_id = student.id
 
-        sub = create_submission(
+        create_submission(
             db=db,
-            assignment_id=assignment.id,
-            student_id=student.id,
+            assignment_id=assignment_id,
+            student_id=student_id,
             submission_type="file",
             file_id=document.file_id,
         )
-        teacher_telegram_id = assignment.teacher.telegram_id
-        student_name = student.full_name or student.telegram_handle
+
+    # Reply to student
+    await update.message.reply_text(
+        "📁 Your file has been submitted and forwarded to your teacher!"
+    )
 
     # Forward to teacher
-    caption = f"📬 *Submission from {student_name}*\nAssignment: {assignment.title}"
+    caption = f"📬 File submission from {student_name}\nAssignment: {assignment_title}"
     await context.bot.send_document(
         chat_id=teacher_telegram_id,
         document=document.file_id,
         caption=caption,
-        parse_mode="Markdown",
     )
-    await update.message.reply_text("✅ Your file has been submitted and forwarded to your teacher!")
 
 
 async def handle_student_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photo submissions."""
     user = update.effective_user
-    photo = update.message.photo[-1]  # highest resolution
+    photo = update.message.photo[-1]
+    caption = update.message.caption or ""
 
     with db_session() as db:
         student = get_user_by_telegram_id(db, user.id)
@@ -272,25 +276,54 @@ async def handle_student_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("No active assignment to submit for.")
             return
         assignment = assignments[0]
+        assignment_id = assignment.id
+        teacher_telegram_id = assignment.teacher.telegram_id
+        student_id = student.id
+        student_name = student.full_name or student.telegram_handle or "Student"
+        assignment_title = assignment.title or "Assignment"
 
         create_submission(
             db=db,
-            assignment_id=assignment.id,
-            student_id=student.id,
+            assignment_id=assignment_id,
+            student_id=student_id,
             submission_type="photo",
             file_id=photo.file_id,
+            text_content=caption if caption else None,
         )
-        teacher_telegram_id = assignment.teacher.telegram_id
-        student_name = student.full_name or student.telegram_handle
 
-    caption = f"📬 *Photo submission from {student_name}*\nAssignment: {assignment.title}"
+    # If caption has progress text, interpret and record it
+    if caption:
+        result = student_agent.run(
+            action="interpret_progress",
+            raw_message=caption,
+            user_id=student_id,
+            assignment_id=assignment_id,
+        )
+        with db_session() as db:
+            record_progress_update(
+                db=db,
+                assignment_id=assignment_id,
+                student_id=student_id,
+                raw_message=caption,
+                interpreted_status=result["interpreted_status"],
+                notes=result["notes"],
+            )
+
+    # Reply to student
+    await update.message.reply_text(
+        "📸 Photo submitted and forwarded to your teacher! Keep up the great work!"
+    )
+
+    # Forward to teacher
+    caption_text = f"📬 Photo submission from {student_name}\nAssignment: {assignment_title}"
+    if caption:
+        caption_text += f"\n\nNote: {caption}"
+
     await context.bot.send_photo(
         chat_id=teacher_telegram_id,
         photo=photo.file_id,
-        caption=caption,
-        parse_mode="Markdown",
+        caption=caption_text,
     )
-    await update.message.reply_text("✅ Photo submitted and forwarded to your teacher!")
 
 
 async def handle_student_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -309,41 +342,45 @@ async def handle_student_voice(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("No active assignment to submit for.")
             return
         assignment = assignments[0]
+        assignment_id = assignment.id
+        teacher_telegram_id = assignment.teacher.telegram_id
+        student_id = student.id
+        student_name = student.full_name or student.telegram_handle or "Student"
+        assignment_title = assignment.title or "Assignment"
 
-        # Get download URL and transcribe
-        file_url = await get_telegram_file_url(settings.TELEGRAM_BOT_TOKEN, voice.file_id)
-        transcription = None
-        if file_url:
-            from services.transcription import transcribe_voice as tv
-            transcription = await tv(file_url)
+    # Get download URL and transcribe
+    file_url = await get_telegram_file_url(settings.TELEGRAM_BOT_TOKEN, voice.file_id)
+    transcription = None
+    if file_url:
+        transcription = await transcribe_voice(file_url)
 
+    # Save submission
+    with db_session() as db:
         create_submission(
             db=db,
-            assignment_id=assignment.id,
-            student_id=student.id,
+            assignment_id=assignment_id,
+            student_id=student_id,
             submission_type="voice",
             file_id=voice.file_id,
             transcription=transcription,
         )
-        teacher_telegram_id = assignment.teacher.telegram_id
-        student_name = student.full_name or student.telegram_handle
 
-    # Forward voice + transcription to teacher
-    teacher_msg = f"🎙️ *Voice submission from {student_name}*\nAssignment: {assignment.title}"
+    # Forward to teacher
+    teacher_msg = f"🎙️ Voice submission from {student_name}\nAssignment: {assignment_title}"
     if transcription:
-        teacher_msg += f"\n\n📝 *Transcription:*\n_{transcription}_"
+        teacher_msg += f"\n\nTranscription:\n{transcription}"
 
     await context.bot.send_voice(
         chat_id=teacher_telegram_id,
         voice=voice.file_id,
         caption=teacher_msg,
-        parse_mode="Markdown",
     )
 
-    reply = "✅ Voice note submitted!"
+    # Reply to student
+    reply = "✅ Voice note submitted and forwarded to your teacher!"
     if transcription:
-        reply += f"\n\n📝 _Transcription:_\n{transcription}"
-    await update.message.reply_text(reply, parse_mode="Markdown")
+        reply += f"\n\nTranscription:\n{transcription}"
+    await update.message.reply_text(reply)
 
 
 # ---------------------------------------------------------------------------
